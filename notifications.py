@@ -75,6 +75,9 @@ def candidates(payload, saved, now):
             continue  # Never recommend a switch on unknown or stale quotas.
         short, weekly = quota
         director = row.get('role') == 'Director'
+        # The account exhaustion alert below includes all affected worker moves.
+        if not director and any(value <= 0 for value in quota):
+            continue
         low = short < (advice.get('minimum_session_remaining', 30) if director else 10) or weekly < (advice.get('minimum_weekly_remaining', 20) if director else 5)
         target = row.get('recommended')
         if row.get('action') == 'Check machine':
@@ -103,6 +106,23 @@ def candidates(payload, saved, now):
         quota = remaining(account, now)
         if quota is not None:
             blocked = any(value <= 0 for value in quota)
+            if blocked:
+                windows = [key for key, value in zip(('session', 'weekly'), quota) if value <= 0]
+                resets = [timestamp((account.get(key) or {}).get('reset')) for key in windows]
+                reset = max(resets) if all(value is not None for value in resets) else None
+                body = email + ' is exhausted (' + ' and '.join(windows) + ' limit reached).'
+                if reset:
+                    body += ' Resets ' + datetime.datetime.fromtimestamp(reset).astimezone().strftime('%a %b %d %I:%M %p %Z') + '.'
+                moves = []
+                for row in advice.get('assignments', []):
+                    if row.get('current') != email or row.get('action') == 'Check machine':
+                        continue
+                    target = row.get('recommended')
+                    available = remaining(accounts.get(target, {}), now)
+                    moves.append(row['machine'] + (' -> ' + target if target != email and available is not None and all(value > 0 for value in available) else ': pause Claude'))
+                if moves:
+                    body += ' Switch: ' + '; '.join(moves) + '.'
+                events.append(event('account_exhausted', email + ':' + ','.join(windows), body, 0))
             if known.get(email, {}).get('blocked') and not blocked:
                 observed = account['observed_at']
                 recoveries[email] = {'at': now, 'observed': observed}
@@ -337,7 +357,13 @@ class AlertEngine:
                     pending.append(item)
             self.saved['pending'] = len(pending)
             history = self.saved.setdefault('history', [])
-            recent = [row for row in history if row['at'] > now - 86400]
+            # Setup/test confirmation is not an operational alert. Recognize
+            # older confirmations too, so existing installs recover immediately.
+            def is_test(row):
+                body = row.get('body', '')
+                return row.get('is_test', False) or (body.startswith('Tailnet: Tailnet usage') and
+                    ('alerts are connected.' in body or 'SMS test.' in body))
+            recent = [row for row in history if row['at'] > now - 86400 and not is_test(row)]
             configured = self.public()['configured']
             enabled = configured and config.get('enabled')
             limit = min(20, max(1, int(config.get('daily_limit', 6))))
@@ -359,7 +385,8 @@ class AlertEngine:
                     selected.append(item)
                     lines.append(text)
                 body = ('Tailnet: ' + ' '.join(lines))[:maximum_length - len(suffix)] + suffix
-                row = {'at': now, 'body': body, 'status': 'sending'}
+                row = {'at': now, 'body': body, 'status': 'sending', 'is_test': test,
+                       'provider': config.get('provider', 'twilio')}
                 history.append(row)
                 for item in selected:
                     tracked[item['key']]['status'] = 'sending'

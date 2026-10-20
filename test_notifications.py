@@ -76,6 +76,56 @@ class AlertTests(unittest.TestCase):
         self.engine.tick(snapshot(now=self.now))
         self.assertEqual(len(self.sent), 1)
 
+    def test_setup_confirmation_does_not_block_first_real_alert_or_consume_cap(self):
+        self.config['daily_limit'] = 1
+        atomic_json(self.config_path, self.config)
+        self.engine.tick({}, test=True)
+        self.assertEqual(len(self.sent), 1)
+        self.now += 10
+        self.engine.tick(snapshot(now=self.now))
+        self.now += 121
+        self.engine.tick(snapshot(now=self.now))
+        self.assertEqual(len(self.sent), 2)
+        self.assertIn('switch Claude', self.sent[-1])
+        self.now += 60
+        self.engine.tick(snapshot(now=self.now, low=True, target='worker2@example.com'))
+        self.assertEqual(len(self.sent), 2)  # The real alert still consumes the cap.
+
+    def test_legacy_setup_confirmation_does_not_start_cooldown(self):
+        atomic_json(self.state_path, {'history': [{'at': NOW - 10, 'status': 'submitted',
+            'body': 'Tailnet: Tailnet usage: Telegram alerts are connected. Account-switch alerts are ready.'}]})
+        self.engine.tick(snapshot())
+        self.now += 121
+        self.engine.tick(snapshot(now=self.now))
+        self.assertEqual(len(self.sent), 1)
+
+    def test_exhausted_account_immediately_reports_affected_switches(self):
+        data = snapshot()
+        data['claude_accounts'][1]['weekly']['used'] = 100
+        data['recommendations']['assignments'].append({
+            'machine': 'worker', 'role': 'Worker', 'action': 'Switch',
+            'current': 'worker1@example.com', 'recommended': 'worker2@example.com'})
+        self.engine.tick(data)
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn('worker1@example.com is exhausted', self.sent[0])
+        self.assertIn('weekly limit reached', self.sent[0])
+        self.assertIn('worker -> worker2@example.com', self.sent[0])
+        self.assertIn('Resets', self.sent[0])
+        self.now += 600
+        data = snapshot(now=self.now)
+        data['claude_accounts'][1]['weekly']['used'] = 100
+        self.new_engine().tick(data)
+        self.assertEqual(len(self.sent), 1)
+
+    def test_exhaustion_bypasses_operational_cooldown(self):
+        self.engine.tick(snapshot(low=True))
+        self.now += 60
+        data = snapshot(now=self.now, low=True)
+        data['claude_accounts'][1]['weekly']['used'] = 100
+        self.engine.tick(data)
+        self.assertEqual(len(self.sent), 2)
+        self.assertIn('is exhausted', self.sent[-1])
+
     def test_stale_usage_or_exhausted_target_never_suggests_switch(self):
         data = snapshot(low=True)
         data['claude_accounts'][-1]['stale'] = True
@@ -99,7 +149,9 @@ class AlertTests(unittest.TestCase):
         data['recommendations']['assignments'] = []
         data['claude_accounts'][1]['weekly']['used'] = 100
         self.engine.tick(data)
-        self.now += 60
+        self.assertIn('is exhausted', self.sent[0])
+        self.sent.clear()
+        self.now += 3601
         data = snapshot(now=self.now)
         data['recommendations']['assignments'] = []
         data['claude_accounts'][1]['stale'] = True

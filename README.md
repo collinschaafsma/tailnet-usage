@@ -117,13 +117,14 @@ a confirmation. Only outbound HTTPS is needed, with no public webhook or dashboa
 
 Alerts run once a minute even with the page closed. They cover director risks,
 assignment changes, worker shortages, confirmed quota recovery, and login problems.
-Director risks are immediate; other conditions must persist two minutes. Fresh
+Director risks and confirmed account exhaustion are immediate; other conditions must persist two minutes. Fresh
 quota readings are required, including after a reset.
 
 Continuous conditions are sent once across restarts. Defaults are a one-hour
 cooldown and six automatic submissions per rolling 24 hours. Critical director
-alerts bypass cooldown, but not the cap. Telegram batches up to 3,500 characters.
-Test messages bypass automatic gates and count toward subsequent limits.
+alerts and confirmed exhaustion bypass cooldown, but not the cap. Telegram batches
+up to 3,500 characters. Setup confirmations and test messages do not start the
+operational cooldown or consume the automatic-alert cap.
 
 ```sh
 python3 notifications.py status
