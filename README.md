@@ -101,8 +101,43 @@ boundaries, assignment changes, and long gaps are excluded.
 Token counts include cached input and are a relative workload proxy, not an exact
 quota conversion. Different tiers, models, outside usage, and workload changes
 affect estimates. Recommendations reduce risk, without guaranteeing uninterrupted
-access. They do not change logins automatically. Switch at a safe pause, move
-workers off a director reserve first, and verify running processes use the new login.
+access. Recommendations require an explicit Switch click to change a login.
+
+## Switching accounts
+
+Click **Switch** beside a recommendation to queue that machine's change. The
+queue survives server restarts, checks roughly every 30 seconds, can be cancelled
+before the write starts, and expires after 12 hours. All Claude processes must
+close first, including idle CLI terminals and helpers. Processes are never killed
+or restarted. Close Claude, wait for **Switched**, then start a new session.
+Leave Claude closed while the write is applying; process checks cannot prevent a
+new CLI from starting at precisely the same moment. Default CLI profiles only are
+supported; custom profile directories or environment-provided logins need manual
+switching. This changes Claude accounts only.
+
+Before applying, the server rechecks the current recommendation, fresh usable
+target quota, and the machine's identity. A changed recommendation blocks the
+queued request until valid again or cancelled. Workers cannot take the director
+reserve; move existing workers off a new reserve before switching the director.
+Offline machines retry. On macOS, the user's login Keychain must be unlocked and
+accessible to the SSH session; a locked Keychain blocks the switch.
+
+The dashboard retains each profile's rotating refresh token. Switched machines
+receive only short-lived access tokens over local stdin or SSH stdin. The server
+synchronizes renewed access tokens for the same account, including while Claude
+is running, without distributing refresh tokens. This uses native credential
+files (and macOS Keychain), which are version-sensitive implementation details;
+clients that retain cached credentials may need a restart after renewal. The
+dashboard host must remain online. A manual browser login or account change stops
+automatic synchronization rather than overwriting it. Sync failures appear in
+the assignment row.
+
+The original machine login is backed up privately under
+`~/.local/state/tailnet-usage/switching/backup-<request-id>.json` with mode 0600.
+Queue state contains account names and statuses only. No credentials are returned
+through HTTP. Mutations require a per-server CSRF header and a matching browser
+origin. Any tailnet member permitted to access this dashboard can also request
+switches: restrict the port with tailnet ACLs as appropriate.
 
 ## Telegram alerts
 

@@ -5,6 +5,8 @@ import copy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import ipaddress
 import json
+import secrets
+from urllib.parse import urlsplit
 from pathlib import Path
 import subprocess
 import shlex
@@ -15,12 +17,15 @@ from accounts import AccountStore, EMAILS
 from recommendations import Advisor
 from notifications import AlertEngine
 from settings import MACHINES, recommendation_settings
+from switching import Switches
 
 ROOT = Path(__file__).resolve().parent
 state = {'machines': [], 'claude_accounts': [], 'updated_at': None, 'refreshing': True}
 lock = threading.Lock()
 advisor = Advisor()
 alerts = AlertEngine()
+switches = Switches(MACHINES)
+csrf_token = secrets.token_urlsafe(32)
 
 
 def probe(machine):
@@ -66,6 +71,9 @@ def poll(machines, interval):
                             row[provider]['stale'] = True
                 rows.append(row)
         with lock:
+            # A completed switch may have collected a newer machine reading.
+            latest = {m['name']: m for m in state['machines']}
+            rows = [latest[r['name']] if latest.get(r['name'], {}).get('collected_at', 0) > r.get('collected_at', 0) else r for r in rows]
             state.update(machines=rows, updated_at=time.time(), refreshing=False)
         time.sleep(interval)
 
@@ -100,6 +108,35 @@ def poll_alerts():
         time.sleep(60)
 
 
+def snapshot():
+    with lock:
+        payload = copy.deepcopy(state)
+    payload['recommendations'] = advisor.evaluate(payload['machines'], payload['claude_accounts'], recommendation_settings())
+    return payload
+
+
+def poll_switches():
+    observed = {}
+    while True:
+        switches.wake.clear()
+        try:
+            switches.tick(snapshot())
+            for name, job in switches.public()['jobs'].items():
+                if job['status'] != 'applied' or observed.get(name) == job['id']:
+                    continue
+                machine = next(m for m in MACHINES if m['name'] == name)
+                reading = dict(probe(machine), name=name, reachable=True)
+                for provider in ('claude', 'codex'):
+                    if not reading[provider].get('error'):
+                        reading[provider]['observed_at'] = reading['collected_at']
+                with lock:
+                    state['machines'] = [reading if m['name'] == name else m for m in state['machines']]
+                observed[name] = job['id']
+        except Exception:
+            pass  # Retry without logging exception text that might include secrets.
+        switches.wake.wait(30)
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split('?', 1)[0]
@@ -108,6 +145,8 @@ class Handler(BaseHTTPRequestHandler):
                 payload = copy.deepcopy(state)
             config = recommendation_settings()
             payload['recommendations'] = advisor.evaluate(payload['machines'], payload['claude_accounts'], config)
+            payload['switching'] = switches.public()
+            payload['csrf_token'] = csrf_token
             payload['configured_accounts'] = list(EMAILS)
             payload['setup_commands'] = {name: 'python3 ' + shlex.quote(str(ROOT / (name + '.py')))
                                          for name in ('notifications', 'accounts')}
@@ -126,6 +165,38 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        # A cross-origin form cannot supply this token/header. Reject foreign
+        # origins too; tailnet ACLs remain the user authorization boundary.
+        origin = self.headers.get('Origin')
+        if (not secrets.compare_digest(self.headers.get('X-CSRF-Token', ''), csrf_token)
+                or (origin and urlsplit(origin).netloc != self.headers.get('Host'))):
+            self.send_error(403)
+            return
+        try:
+            size = int(self.headers.get('Content-Length', '0'))
+            if not 0 < size <= 4096:
+                raise ValueError('Invalid request size.')
+            request = json.loads(self.rfile.read(size))
+            if self.path == '/api/switch':
+                switches.queue(request.get('machine'), request.get('target'), snapshot())
+            elif self.path == '/api/switch/cancel':
+                switches.cancel(request.get('machine'))
+            else:
+                self.send_error(404)
+                return
+            body, status = json.dumps({'ok': True}).encode(), 200
+        except (ValueError, TypeError, AttributeError) as error:
+            body, status = json.dumps({'error': str(error)}).encode(), 409
+        except Exception:
+            body, status = b'{"error":"Unable to save switch request."}', 500
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
         self.end_headers()
         self.wfile.write(body)
 
@@ -148,5 +219,6 @@ if __name__ == '__main__':
     threading.Thread(target=poll, args=(machines, max(300, args.interval)), daemon=True).start()
     threading.Thread(target=poll_accounts, daemon=True).start()
     threading.Thread(target=poll_alerts, daemon=True).start()
+    threading.Thread(target=poll_switches, daemon=True).start()
     print('Dashboard: http://' + args.bind + ':' + str(args.port), flush=True)
     server.serve_forever()
