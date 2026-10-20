@@ -107,8 +107,9 @@ access. Recommendations require an explicit Switch click to change a login.
 
 Click **Switch** beside a recommendation to queue that machine's change. The
 queue survives server restarts, checks roughly every 30 seconds, can be cancelled
-before the write starts, and expires after 12 hours. All Claude processes must
-close first, including idle CLI terminals and helpers. Processes are never killed
+before the write starts, and expires after 12 hours. All Claude work sessions must
+close first, including idle CLI terminals. Browser connectors and bundled search
+helpers do not block switching. Processes are never killed
 or restarted. Close Claude, wait for **Switched**, then start a new session.
 Leave Claude closed while the write is applying; process checks cannot prevent a
 new CLI from starting at precisely the same moment. Default CLI profiles only are

@@ -33,28 +33,54 @@ def write(path, value):
             os.unlink(name)
 
 
+def is_work_session(name, args):
+    """Native Claude also runs its Chrome connector and search tool binary."""
+    argv0 = Path(args[0].decode(errors='replace')).name if args else ''
+    if argv0 in ('ugrep', 'rg', 'ripgrep'):
+        return False
+    if len(args) > 1 and args[1] == b'--chrome-native-host':
+        return False
+    if name.startswith('claude'):
+        return True
+    return name in ('node', 'bun') and any(b'claude-code' in arg for arg in args[:3])
+
+
 def active_claude():
-    """Conservative: an open idle CLI also counts as active; never kill it."""
+    """An open idle work CLI counts as active; non-session helpers do not."""
     if sys.platform == 'darwin':
         result = subprocess.run(['ps', '-axo', 'pid=,comm='], capture_output=True, text=True, timeout=10, check=True)
-        commands = [line.strip().split(None, 1)[-1] for line in result.stdout.splitlines()]
-        return sum(Path(command).name.startswith('claude') or '/claude/' in command for command in commands)
+        count = 0
+        for line in result.stdout.splitlines():
+            parts = line.strip().split(None, 1)
+            if len(parts) != 2:
+                continue
+            pid, command = parts
+            name = Path(command).name
+            if not (name.startswith('claude') or '/claude/' in command or name in ('node', 'bun')):
+                continue
+            detail = subprocess.run(['ps', '-p', pid, '-o', 'args='], capture_output=True, text=True, timeout=10)
+            if detail.returncode:
+                continue  # Process exited between snapshots.
+            try:
+                args = [arg.encode() for arg in shlex.split(detail.stdout)]
+            except ValueError:
+                count += 1  # Unparseable candidate fails closed.
+                continue
+            count += is_work_session('claude' if '/claude/' in command else name, args)
+        return count
     count = 0
     for path in Path('/proc').iterdir():
         if not path.name.isdigit():
             continue
         try:
             name = (path / 'comm').read_text().strip()
-            if name.startswith('claude'):
-                count += 1
-            elif name in ('node', 'bun'):
-                args = (path / 'cmdline').read_bytes().split(b'\0')[:3]
-                count += any(b'claude-code' in arg and (b'cli' in arg or b'claude' in arg) for arg in args)
+            if name.startswith('claude') or name in ('node', 'bun'):
+                args = (path / 'cmdline').read_bytes().split(b'\0')
+                count += is_work_session(name, args)
         except FileNotFoundError:
             continue
         except PermissionError:
-            # Other users' processes cannot use this user's login.
-            continue
+            continue  # Other users' processes cannot use this user's login.
     return count
 
 

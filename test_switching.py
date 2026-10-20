@@ -19,6 +19,23 @@ def login():
                             'scopes': ['user:inference']}, 'identity': {'emailAddress': TARGET}}
 
 
+class ProcessTests(unittest.TestCase):
+    def test_native_browser_connector_is_not_work(self):
+        self.assertFalse(worker.is_work_session('claude', [b'claude', b'--chrome-native-host']))
+
+    def test_bundled_search_is_not_work_even_when_comm_is_claude(self):
+        self.assertFalse(worker.is_work_session('claude', [b'ugrep', b'--hidden']))
+        self.assertFalse(worker.is_work_session('claude', [b'/bin/rg', b'--files']))
+
+    def test_idle_or_print_cli_still_blocks(self):
+        self.assertTrue(worker.is_work_session('claude', [b'claude']))
+        self.assertTrue(worker.is_work_session('claude', [b'claude', b'-p', b'example']))
+
+    def test_node_cli_blocks_but_other_node_apps_do_not(self):
+        self.assertTrue(worker.is_work_session('node', [b'node', b'/package/claude-code/cli.js']))
+        self.assertFalse(worker.is_work_session('node', [b'node', b'app.js']))
+
+
 class WorkerTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
