@@ -1,0 +1,20 @@
+{
+  "claude_accounts": [
+    "director@example.com",
+    "worker1@example.com",
+    "worker2@example.com",
+    "worker3@example.com"
+  ],
+  "machines": [
+    {"name": "dashboard", "local": true},
+    {"name": "director", "ssh": "user@director"},
+    {"name": "worker1", "ssh": "user@worker1"},
+    {"name": "worker2", "ssh": "user@worker2"},
+    {"name": "mac-worker", "ssh": "user@mac-worker"}
+  ],
+  "recommendations": {
+    "director_machine": "director",
+    "preferred_director_account": "director@example.com"
+  },
+  "dashboard_url": "http://dashboard:8787"
+}

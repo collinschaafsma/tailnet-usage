@@ -1,0 +1,15 @@
+[Unit]
+Description=Private tailnet AI usage dashboard
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Work/tailnet-usage
+Environment=PATH=%h/.local/bin:%h/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin
+# Replace loopback with this machine's Tailscale IPv4 address for tailnet access.
+ExecStart=/usr/bin/python3 %h/Work/tailnet-usage/server.py --bind 127.0.0.1 --port 8787
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=default.target

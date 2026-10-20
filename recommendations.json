@@ -1,0 +1,7 @@
+{
+  "director_machine": "director",
+  "reserve_director_account": true,
+  "director_min_session_remaining": 30,
+  "director_min_weekly_remaining": 20,
+  "freshness_seconds": 900
+}

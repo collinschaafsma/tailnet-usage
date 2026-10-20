@@ -1,0 +1,29 @@
+__pycache__/
+*.pyc
+.private/
+.credentials.json
+.claude.json
+*.log
+
+# Local fleet/account details; publish config.example.json instead.
+config.local.json
+machines.json
+tailnet-usage.service
+*.local.json
+
+# Credentials and runtime data never belong in source control.
+.env
+.env.*
+!.env.example
+*-config.json
+*-events.json
+*-history.json
+monitor.json
+profiles/
+*.sqlite*
+*.db
+*.pem
+*.key
+.venv/
+.pytest_cache/
+dist/
